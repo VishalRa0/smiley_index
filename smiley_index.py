@@ -5,6 +5,8 @@ import numpy as np
 import math
 from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
+from streamlit_webrtc import webrtc_streamer, VideoProcessorBase, RTCConfiguration
+import av
 
 def euclidean(p1, p2, w, h):
     return math.dist((p1.x * w, p1.y * h), (p2.x * w, p2.y * h))
@@ -48,52 +50,104 @@ def normalize_smile_score(metric):
     score = 1 + norm * 4
     return round(score, 2)
 
+# --- Video Processor Class ---
+class SmileDetector(VideoProcessorBase):
+    def recv(self, frame):
+        img = frame.to_ndarray(format="bgr24")
+        h, w, _ = img.shape
+        
+        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=img)
+        detection_result = detector.detect(mp_image)
+        
+        annotated_frame = img.copy()
+        
+        if detection_result.face_landmarks:
+            landmarks = detection_result.face_landmarks[0]
+            smile_metric = compute_smile_metric(landmarks, w, h)
+            smile_score = normalize_smile_score(smile_metric)
+            status = "Smiling" if smile_metric >= 102 else " Not Smiling"
+            
+            # Draw landmarks
+            for idx in MOUTH_POINTS:
+                lm = landmarks[idx]
+                x, y = int(lm.x * w), int(lm.y * h)
+                cv2.circle(annotated_frame, (x, y), 3, (0, 255, 0), -1)
+            
+            # Add text overlays
+            cv2.putText(annotated_frame, f"Metric: {smile_metric:.1f}", (30, 30),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+            cv2.putText(annotated_frame, f"Score: {smile_score}/5", (30, 60),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+            cv2.putText(annotated_frame, status, (30, 90),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
+        
+        return av.VideoFrame.from_ndarray(annotated_frame, format="bgr24")
+
 # --- Streamlit UI ---
 st.set_page_config(page_title="Smile Detection", layout="wide")
-st.title("Smile Detection")
-st.markdown("**Capture a photo using your camera to detect your smile!**")
+st.title(" Smile Detection")
+st.markdown("**Choose your mode below:**")
 
-# --- Streamlit Camera Input ---
-img_file_buffer = st.camera_input("📸 Capture a photo")
+mode = st.radio("Choose camera mode:", ["📸 Capture Photo", "🎥 Live Video Stream"])
 
-if img_file_buffer:
-    bytes_data = img_file_buffer.getvalue()
-    frame = cv2.imdecode(np.frombuffer(bytes_data, np.uint8), cv2.IMREAD_COLOR)
-    h, w, _ = frame.shape
+# --- Photo Capture Mode ---
+if mode == "📸 Capture Photo":
+    img_file_buffer = st.camera_input("Capture a photo")
     
-    mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=frame)
-    detection_result = detector.detect(mp_image)
+    if img_file_buffer:
+        bytes_data = img_file_buffer.getvalue()
+        frame = cv2.imdecode(np.frombuffer(bytes_data, np.uint8), cv2.IMREAD_COLOR)
+        h, w, _ = frame.shape
+        
+        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=frame)
+        detection_result = detector.detect(mp_image)
+        
+        annotated_frame = frame.copy()
+        
+        if detection_result.face_landmarks:
+            landmarks = detection_result.face_landmarks[0]
+            smile_metric = compute_smile_metric(landmarks, w, h)
+            smile_score = normalize_smile_score(smile_metric)
+            status = "Smiling" if smile_metric >= 102 else " Not Smiling"
+            
+            # Draw landmarks
+            for idx in MOUTH_POINTS:
+                lm = landmarks[idx]
+                x, y = int(lm.x * w), int(lm.y * h)
+                cv2.circle(annotated_frame, (x, y), 3, (0, 255, 0), -1)
+            
+            # Add text overlays
+            cv2.putText(annotated_frame, f"Metric: {smile_metric:.1f}", (30, 30),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+            cv2.putText(annotated_frame, f"Score: {smile_score}/5", (30, 60),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+            cv2.putText(annotated_frame, status, (30, 90),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
+            
+            # Display image
+            st.image(cv2.cvtColor(annotated_frame, cv2.COLOR_BGR2RGB), caption=status)
+            
+            # Display metrics
+            col1, col2 = st.columns(2)
+            with col1:
+                st.metric("Smile Score (1–5)", smile_score)
+            with col2:
+                st.metric("Smile Metric", f"{smile_metric:.1f}")
+        else:
+            st.warning("No face detected. Please try again!")
+
+# --- Live Video Stream Mode ---
+elif mode == "🎥 Live Video Stream":
+    st.markdown("### Real-time Smile Detection")
+    st.info("Click 'START' to begin live detection. Click 'STOP' when done.")
     
-    annotated_frame = frame.copy()
+    RTC_CONFIGURATION = RTCConfiguration(
+        {"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]}
+    )
     
-    if detection_result.face_landmarks:
-        landmarks = detection_result.face_landmarks[0]
-        smile_metric = compute_smile_metric(landmarks, w, h)
-        smile_score = normalize_smile_score(smile_metric)
-        status = " Smiling" if smile_metric >= 102 else " Not Smiling"
-        
-        # Draw landmarks
-        for idx in MOUTH_POINTS:
-            lm = landmarks[idx]
-            x, y = int(lm.x * w), int(lm.y * h)
-            cv2.circle(annotated_frame, (x, y), 3, (0, 255, 0), -1)
-        
-        # Add text overlays
-        cv2.putText(annotated_frame, f"Metric: {smile_metric:.1f}", (30, 30),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
-        cv2.putText(annotated_frame, f"Score: {smile_score}/5", (30, 60),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-        cv2.putText(annotated_frame, status, (30, 90),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
-        
-        # Display image
-        st.image(cv2.cvtColor(annotated_frame, cv2.COLOR_BGR2RGB), caption=status)
-        
-        # Display metrics
-        col1, col2 = st.columns(2)
-        with col1:
-            st.metric("Smile Score (1–5)", smile_score)
-        with col2:
-            st.metric("Smile Metric", f"{smile_metric:.1f}")
-    else:
-        st.warning("No face detected. Please try again!")
+    webrtc_streamer(
+        key="smile-detection",
+        video_processor_factory=SmileDetector,
+        rtc_configuration=RTC_CONFIGURATION,
+        media_stream_constraints={"video": True, "audio": False},
+    )
