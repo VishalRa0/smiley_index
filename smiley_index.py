@@ -120,7 +120,7 @@ def euclidean(p1, p2, w, h):
     return math.dist((p1.x * w, p1.y * h), (p2.x * w, p2.y * h))
 
 # --- Load MediaPipe model ---
-base_options = python.BaseOptions(model_asset_path="C:/Users/vishal.rao.lv/Downloads/face_landmarker (1).task")
+base_options = python.BaseOptions(model_asset_path="face_landmarker (1).task")
 options = vision.FaceLandmarkerOptions(
     base_options=base_options,
     output_face_blendshapes=True,
@@ -236,4 +236,5 @@ elif mode == "OpenCV Live Capture":
             break
 
     cap.release()
+
     cv2.destroyAllWindows()
